@@ -17,6 +17,7 @@ import (
 	appbsky "github.com/bluesky-social/indigo/api/bsky"
 	lexutil "github.com/bluesky-social/indigo/lex/util"
 	"github.com/bluesky-social/indigo/xrpc"
+	"github.com/golang-jwt/jwt"
 	"github.com/ipfs/go-cid"
 
 	"fediversa/internal/config"
@@ -450,4 +451,98 @@ func (bsc *BlueskyClient) FetchAuthorFeed(ctx context.Context, actor string, cur
 	filter := ""     // Or use "posts_no_replies", "posts_with_media", etc.
 	isMuted := false // Add the missing boolean argument
 	return appbsky.FeedGetAuthorFeed(ctx, bsc.client, actor, cursor, filter, isMuted, limit)
+}
+
+// RefreshSessionIfNeeded checks if the current session token is expired or nearing expiry
+// and attempts to refresh it using the stored refresh token.
+// It returns the potentially updated Account object, a boolean indicating if refresh occurred,
+// and an error if refresh was needed but failed.
+func (bsc *BlueskyClient) RefreshSessionIfNeeded(ctx context.Context, acc *models.Account) (*models.Account, bool, error) {
+	// 1. Check if AccessToken exists
+	if !acc.AccessToken.Valid || acc.AccessToken.String == "" {
+		logging.Info("No access token found for Bluesky account %s, refresh not possible.", acc.Username)
+		return acc, false, nil // No token to check or refresh
+	}
+
+	// 2. Parse the JWT access token to check expiry (basic check, doesn't validate signature)
+	token, _, err := new(jwt.Parser).ParseUnverified(acc.AccessToken.String, jwt.MapClaims{})
+	if err != nil {
+		logging.Warn("Failed to parse Bluesky access token for expiry check: %v. Assuming refresh needed.", err)
+		// Proceed as if refresh is needed if parsing fails
+	} else {
+		if claims, ok := token.Claims.(jwt.MapClaims); ok {
+			if expFloat, ok := claims["exp"].(float64); ok {
+				expTime := time.Unix(int64(expFloat), 0)
+				// Refresh if token expires within the next 5 minutes
+				if time.Now().Before(expTime.Add(-5 * time.Minute)) {
+					logging.Info("Bluesky access token for %s is still valid.", acc.Username)
+					return acc, false, nil // Token is still valid
+				}
+				logging.Info("Bluesky access token for %s is expired or nearing expiry.", acc.Username)
+			} else {
+				logging.Warn("Could not read expiry claim from Bluesky access token. Assuming refresh needed.")
+			}
+		} else {
+			logging.Warn("Could not read claims from Bluesky access token. Assuming refresh needed.")
+		}
+	}
+
+	// 3. Attempt refresh if needed
+	logging.Info("Attempting to refresh Bluesky session for %s...", acc.Username)
+	if !acc.RefreshToken.Valid || acc.RefreshToken.String == "" {
+		return acc, false, fmt.Errorf("refresh needed for %s, but no refresh token found", acc.Username)
+	}
+
+	// Use the correct function to call the refresh endpoint
+	// Make sure the client has the refresh token set before calling this
+	bsc.client.Auth = &xrpc.AuthInfo{
+		RefreshJwt: acc.RefreshToken.String,
+		// We might not have AccessJwt, Handle, Did here if only RefreshToken was stored previously,
+		// but ServerRefreshSession only needs the RefreshJwt in the client.Auth.
+		// Keep existing ones if available, primarily for logging/consistency.
+		AccessJwt: acc.AccessToken.String,
+		Handle:    acc.Username,
+		Did:       acc.UserID,
+	}
+	newSessionOutput, err := comatproto.ServerRefreshSession(ctx, bsc.client)
+	if err != nil {
+		// Check if the error is specifically about an invalid refresh token
+		// Note: The error might come wrapped, so Contains might be needed.
+		if strings.Contains(err.Error(), "invalid refresh token") || strings.Contains(err.Error(), "ExpiredToken") || strings.Contains(err.Error(), "BadRefreshToken") {
+			logging.Error("Bluesky refresh token for %s is invalid or expired. Manual re-login required. Error: %v", acc.Username, err)
+			// Clear the invalid refresh token to prevent loops? Or let the login flow handle it.
+			// For now, just return the specific error.
+			return acc, false, fmt.Errorf("invalid or expired refresh token for %s: %w", acc.Username, err)
+		} else {
+			// Other refresh error
+			logging.Error("Failed to refresh Bluesky session for %s: %v", acc.Username, err)
+			return acc, false, fmt.Errorf("failed to refresh session for %s: %w", acc.Username, err)
+		}
+	}
+
+	// 4. Refresh successful, update client Auth and account object
+	if newSessionOutput == nil || newSessionOutput.AccessJwt == "" || newSessionOutput.RefreshJwt == "" {
+		// This shouldn't happen if ServerRefreshSession succeeded without error
+		logging.Error("Bluesky ServerRefreshSession succeeded but returned empty session data for %s", acc.Username)
+		return acc, false, fmt.Errorf("refresh succeeded but session data is empty for %s", acc.Username)
+	}
+
+	// Update the client's active auth session
+	bsc.client.Auth = &xrpc.AuthInfo{
+		AccessJwt:  newSessionOutput.AccessJwt,
+		RefreshJwt: newSessionOutput.RefreshJwt,
+		Handle:     newSessionOutput.Handle, // Use handle from refresh response
+		Did:        newSessionOutput.Did,    // Use DID from refresh response
+	}
+
+	// Update the account object to be saved later
+	acc.AccessToken = sql.NullString{String: newSessionOutput.AccessJwt, Valid: true}
+	acc.RefreshToken = sql.NullString{String: newSessionOutput.RefreshJwt, Valid: true}
+	acc.UserID = newSessionOutput.Did      // Update DID if it changed (shouldn't happen)
+	acc.Username = newSessionOutput.Handle // Update handle if it changed
+	// Update expiry time if possible (optional, as we re-check before use)
+	// acc.ExpiresAt = ... (Requires parsing the new access token again)
+
+	logging.Info("Successfully refreshed Bluesky session for %s", acc.Username)
+	return acc, true, nil
 }
