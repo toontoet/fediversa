@@ -271,12 +271,47 @@ func (s *Syncer) syncServiceToTarget(ctx context.Context, sourceService, targetS
 			logging.Error("Sync cycle: Error fetching Bluesky feed: %v", fetchErr)
 			return
 		}
-		// Convert FeedViewPost to []interface{}
-		for _, postView := range feed.Feed {
-			newPosts = append(newPosts, postView)
+
+		// --- Client-Side Filtering for Bluesky based on lastCheckedID ---
+		filteredFeed := []*bsky.FeedDefs_FeedViewPost{}
+		if lastCheckedIDStr != nil && *lastCheckedIDStr != "" {
+			logging.Info("Filtering fetched Bluesky posts newer than baseline: %s", *lastCheckedIDStr)
+			lastTid, err := extractTIDFromAtURI(*lastCheckedIDStr)
+			if err != nil {
+				logging.Warn("Could not extract TID from lastCheckedID URI %s: %v. Processing all fetched posts.", *lastCheckedIDStr, err)
+				filteredFeed = feed.Feed // Fallback: process all if baseline URI is invalid
+			} else {
+				for _, postView := range feed.Feed {
+					if postView.Post == nil {
+						continue // Skip posts with nil data
+					}
+					currentTid, err := extractTIDFromAtURI(postView.Post.Uri)
+					if err != nil {
+						logging.Warn("Could not extract TID from post URI %s: %v. Skipping post.", postView.Post.Uri, err)
+						continue
+					}
+					// Only include posts strictly newer than the last checked TID
+					if currentTid > lastTid {
+						filteredFeed = append(filteredFeed, postView)
+					}
+				}
+				logging.Info("Filtered Bluesky posts: %d remaining after checking baseline TID %s", len(filteredFeed), lastTid)
+			}
+		} else {
+			// No baseline set (should only happen on very first fetch before baseline is set)
+			filteredFeed = feed.Feed
 		}
-		if len(feed.Feed) > 0 && feed.Feed[0].Post != nil {
-			newestPostID = feed.Feed[0].Post.Uri // Bluesky returns newest first
+
+		// Convert filtered FeedViewPost to []interface{}
+		newPosts = make([]interface{}, len(filteredFeed))
+		for i, postView := range filteredFeed {
+			newPosts[i] = postView
+		}
+		if len(filteredFeed) > 0 && filteredFeed[0].Post != nil {
+			newestPostID = filteredFeed[0].Post.Uri // Use newest from the *filtered* list for potential baseline update
+		} else if len(feed.Feed) > 0 && feed.Feed[0].Post != nil {
+			// If filtering resulted in empty list, still use the absolute newest for first-sync baseline
+			newestPostID = feed.Feed[0].Post.Uri
 		}
 	default:
 		logging.Error("Unsupported source service: %s", sourceService)
@@ -686,7 +721,8 @@ func (s *Syncer) syncServiceToTarget(ctx context.Context, sourceService, targetS
 			TargetPostID:  targetPostID,
 		}
 		if err := s.DB.SaveSyncedPost(syncedPost); err != nil {
-			logging.Error("Failed to save sync record for source post %s: %v", sourcePostID, err)
+			// Log more prominently if saving the sync status fails, as this can cause duplicates
+			logging.Error("CRITICAL: Failed to save sync record for source post %s -> target post %s. This may cause duplicates later! Error: %v", sourcePostID, targetPostID, err)
 		}
 	}
 
@@ -782,4 +818,29 @@ func (s *Syncer) refreshBlueskySessionIfNeededHelper(ctx context.Context, acc *m
 		return false, err // Propagate the error
 	}
 	return refreshed, nil
+}
+
+// extractTIDFromAtURI parses an at:// URI and returns the TID part.
+func extractTIDFromAtURI(uri string) (string, error) {
+	// Example URI: at://did:plc:lc5rl6rwa6mm42j4kr7xelbk/app.bsky.feed.post/3ljmbyu4zgr2o
+	if !strings.HasPrefix(uri, "at://") {
+		return "", fmt.Errorf("invalid AT URI format: does not start with at://")
+	}
+	parts := strings.Split(uri, "/")
+	if len(parts) < 4 {
+		return "", fmt.Errorf("invalid AT URI format: not enough parts")
+	}
+	// The TID is the last part
+	tid := parts[len(parts)-1]
+	if tid == "" {
+		return "", fmt.Errorf("invalid AT URI format: empty TID part")
+	}
+	// Basic validation: TIDs are typically base32 Crockford encoded
+	// For now, just check length and basic characters, could be more robust
+	if len(tid) < 10 { // Arbitrary minimum length check
+		// return "", fmt.Errorf("invalid TID format: too short")
+		// Allow shorter for now, might be other URI types?
+	}
+	// Add more validation if needed
+	return tid, nil
 }
