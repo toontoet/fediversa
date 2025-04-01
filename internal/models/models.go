@@ -16,6 +16,7 @@ type Account struct {
 	RefreshToken      sql.NullString `db:"refresh_token"`        // OAuth refresh token (nullable)
 	AppPassword       sql.NullString `db:"app_password"`         // Bluesky app password (nullable)
 	ExpiresAt         sql.NullTime   `db:"expires_at"`           // Token expiry time (nullable)
+	RefreshExpiresAt  sql.NullTime   `db:"refresh_expires_at"`   // Refresh token expiry time (nullable)
 	LastCheckedPostID sql.NullString `db:"last_checked_post_id"` // ID of the last post retrieved from this service (nullable)
 	CreatedAt         time.Time      `db:"created_at"`           // Timestamp of creation
 	UpdatedAt         time.Time      `db:"updated_at"`           // Timestamp of last update

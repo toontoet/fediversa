@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"net/url"
+	"time"
 
 	"fediversa/internal/logging"
 	"fediversa/internal/models"
@@ -126,8 +127,8 @@ func (db *DB) Close() error {
 // It uses UPSERT logic (ON CONFLICT DO UPDATE).
 func (db *DB) SaveAccount(acc *models.Account) error {
 	query := `
-		INSERT INTO accounts (service, user_id, username, access_token, refresh_token, app_password, expires_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		INSERT INTO accounts (service, user_id, username, access_token, refresh_token, app_password, expires_at, refresh_expires_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		ON CONFLICT(service) DO UPDATE SET
 			user_id = excluded.user_id,
 			username = excluded.username,
@@ -135,6 +136,7 @@ func (db *DB) SaveAccount(acc *models.Account) error {
 			refresh_token = excluded.refresh_token,
 			app_password = excluded.app_password,
 			expires_at = excluded.expires_at,
+			refresh_expires_at = excluded.refresh_expires_at,
 			updated_at = CURRENT_TIMESTAMP;
 	`
 	_, err := db.Exec(query,
@@ -145,6 +147,7 @@ func (db *DB) SaveAccount(acc *models.Account) error {
 		acc.RefreshToken,
 		acc.AppPassword,
 		acc.ExpiresAt,
+		acc.RefreshExpiresAt,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to save account for service %s: %w", acc.Service, err)
@@ -157,7 +160,7 @@ func (db *DB) SaveAccount(acc *models.Account) error {
 func (db *DB) GetAccountByService(service string) (*models.Account, error) {
 	query := `
 		SELECT id, service, user_id, username, access_token, refresh_token, app_password, expires_at,
-		       last_checked_post_id, created_at, updated_at
+			   refresh_expires_at, last_checked_post_id, created_at, updated_at
 		FROM accounts
 		WHERE service = ?;
 	`
@@ -173,6 +176,7 @@ func (db *DB) GetAccountByService(service string) (*models.Account, error) {
 		&acc.RefreshToken,
 		&acc.AppPassword,
 		&acc.ExpiresAt,
+		&acc.RefreshExpiresAt,
 		&acc.LastCheckedPostID,
 		&acc.CreatedAt,
 		&acc.UpdatedAt,
@@ -316,14 +320,34 @@ func (db *DB) GetTotalSyncedPosts() (int, error) {
 // Returns sql.NullTime which can be checked for validity.
 func (db *DB) GetLastSyncTime(sourceService string) (sql.NullTime, error) {
 	query := `SELECT MAX(created_at) FROM synced_posts WHERE source_service = ?;`
-	var lastSyncTime sql.NullTime
-	err := db.QueryRow(query, sourceService).Scan(&lastSyncTime)
+	var lastSyncTimestampStr sql.NullString // Scan into NullString first
+	err := db.QueryRow(query, sourceService).Scan(&lastSyncTimestampStr)
+
 	if err != nil {
-		// If no rows found, Scan will return sql.ErrNoRows, but lastSyncTime will remain null/invalid,
-		// which is the desired behavior (no syncs yet for this service).
-		if err != sql.ErrNoRows {
-			return lastSyncTime, fmt.Errorf("failed to get last sync time for service %s: %w", sourceService, err)
+		// sql.ErrNoRows is expected if no posts synced from this source yet, return empty NullTime
+		if err == sql.ErrNoRows {
+			return sql.NullTime{}, nil
 		}
+		// Other database error
+		return sql.NullTime{}, fmt.Errorf("failed to get last sync time for service %s: %w", sourceService, err)
 	}
-	return lastSyncTime, nil
+
+	// If the string is not valid (e.g., MAX returned NULL because no rows matched),
+	// return an empty NullTime.
+	if !lastSyncTimestampStr.Valid {
+		return sql.NullTime{}, nil
+	}
+
+	// Parse the timestamp string (SQLite default format is 'YYYY-MM-DD HH:MM:SS')
+	// We need to know the exact format stored. Assuming 'YYYY-MM-DD HH:MM:SS'.
+	// Note: Go's reference time is Mon Jan 2 15:04:05 -0700 MST 2006
+	parsedTime, parseErr := time.Parse("2006-01-02 15:04:05", lastSyncTimestampStr.String)
+	if parseErr != nil {
+		// If parsing fails, return error and log the problematic string
+		logging.Error("Failed to parse last sync timestamp string '%s' for service %s: %v", lastSyncTimestampStr.String, sourceService, parseErr)
+		return sql.NullTime{}, fmt.Errorf("failed to parse last sync timestamp for service %s: %w", sourceService, parseErr)
+	}
+
+	// Successfully parsed, return as sql.NullTime
+	return sql.NullTime{Time: parsedTime, Valid: true}, nil
 }

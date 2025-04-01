@@ -161,6 +161,29 @@ func (bsc *BlueskyClient) Authenticate(ctx context.Context, identifier, appPassw
 		AppPassword:  sql.NullString{String: appPassword, Valid: true}, // Store the app password used
 	}
 
+	// Parse both access and refresh tokens to get their expiry times
+	accessToken, _, err := new(jwt.Parser).ParseUnverified(sess.AccessJwt, jwt.MapClaims{})
+	if err == nil {
+		if claims, ok := accessToken.Claims.(jwt.MapClaims); ok {
+			if expFloat, ok := claims["exp"].(float64); ok {
+				expTime := time.Unix(int64(expFloat), 0)
+				acc.ExpiresAt = sql.NullTime{Time: expTime, Valid: true}
+				logging.Info("Bluesky access token expires at: %v", expTime)
+			}
+		}
+	}
+
+	refreshToken, _, err := new(jwt.Parser).ParseUnverified(sess.RefreshJwt, jwt.MapClaims{})
+	if err == nil {
+		if claims, ok := refreshToken.Claims.(jwt.MapClaims); ok {
+			if expFloat, ok := claims["exp"].(float64); ok {
+				expTime := time.Unix(int64(expFloat), 0)
+				acc.RefreshExpiresAt = sql.NullTime{Time: expTime, Valid: true}
+				logging.Info("Bluesky refresh token expires at: %v", expTime)
+			}
+		}
+	}
+
 	return acc, nil
 }
 
@@ -526,53 +549,32 @@ func (bsc *BlueskyClient) FetchAuthorFeed(ctx context.Context, actor string, cur
 // RefreshSessionIfNeeded checks if a refresh token exists and attempts to refresh the session.
 // It now includes logging the signing algorithm from the access token if parsing fails.
 func (bsc *BlueskyClient) RefreshSessionIfNeeded(ctx context.Context, acc *models.Account) (*models.Account, bool, error) {
-	// 1. Check if RefreshToken exists
+	// 1. Check if RefreshToken exists and is still valid
 	if !acc.RefreshToken.Valid || acc.RefreshToken.String == "" {
 		logging.Info("No refresh token found for Bluesky account %s, cannot refresh.", acc.Username)
 		return acc, false, nil
 	}
 
-	// 2. Attempt to parse AccessToken locally JUST to check expiry and log algorithm if needed
-	shouldAttemptRefresh := true // Default to true
-	if acc.AccessToken.Valid && acc.AccessToken.String != "" {
-		token, _, err := new(jwt.Parser).ParseUnverified(acc.AccessToken.String, jwt.MapClaims{})
-		if err != nil {
-			// Log more details about the parsing error, including the algorithm if possible
-			alg := "unknown"
-			if token != nil && token.Header != nil {
-				if algClaim, ok := token.Header["alg"]; ok {
-					if algStr, ok := algClaim.(string); ok {
-						alg = algStr
-					}
-				}
-			}
-			logging.Warn("Failed to parse Bluesky access token (alg: %s) for expiry check: %v. Proceeding with refresh attempt.", alg, err)
-			// Keep shouldAttemptRefresh = true
+	// Check if refresh token itself is expired
+	if acc.RefreshExpiresAt.Valid && time.Now().After(acc.RefreshExpiresAt.Time) {
+		logging.Error("Bluesky refresh token for %s has expired (expired at %v). Manual re-login required.", acc.Username, acc.RefreshExpiresAt.Time)
+		return acc, false, fmt.Errorf("refresh token expired for %s", acc.Username)
+	}
+
+	// 2. Check if we need to refresh based on access token expiry time
+	shouldAttemptRefresh := true
+	if acc.ExpiresAt.Valid {
+		// Refresh if token expires in less than 5 minutes
+		if time.Now().Before(acc.ExpiresAt.Time.Add(-5 * time.Minute)) {
+			logging.Info("Bluesky access token for %s is still valid (expires at %v).", acc.Username, acc.ExpiresAt.Time)
+			shouldAttemptRefresh = false
 		} else {
-			// Parsing succeeded, now check expiry
-			if claims, ok := token.Claims.(jwt.MapClaims); ok {
-				if expFloat, ok := claims["exp"].(float64); ok {
-					expTime := time.Unix(int64(expFloat), 0)
-					if time.Now().Before(expTime.Add(-5 * time.Minute)) {
-						logging.Info("Bluesky access token for %s is still valid.", acc.Username)
-						shouldAttemptRefresh = false // Token is valid, no need to refresh now
-					} else {
-						logging.Info("Bluesky access token for %s is expired or nearing expiry.", acc.Username)
-					}
-				} else {
-					logging.Warn("Could not read expiry claim from Bluesky access token. Assuming refresh needed.")
-				}
-			} else {
-				logging.Warn("Could not read claims from Bluesky access token. Assuming refresh needed.")
-			}
+			logging.Info("Bluesky access token for %s is expired or nearing expiry (expires at %v).", acc.Username, acc.ExpiresAt.Time)
 		}
-	} else {
-		// No access token found, definitely need to refresh if we have a refresh token
-		logging.Info("No valid access token found for %s, attempting refresh.", acc.Username)
 	}
 
 	if !shouldAttemptRefresh {
-		return acc, false, nil // Don't attempt refresh if token is still valid
+		return acc, false, nil
 	}
 
 	// 3. Attempt refresh
@@ -638,6 +640,33 @@ func (bsc *BlueskyClient) RefreshSessionIfNeeded(ctx context.Context, acc *model
 	acc.RefreshToken = sql.NullString{String: newSessionOutput.RefreshJwt, Valid: true}
 	acc.UserID = newSessionOutput.Did
 	acc.Username = newSessionOutput.Handle
+
+	// After successful refresh, update both token expiry times
+	if newSessionOutput != nil {
+		// Parse new access token expiry
+		accessToken, _, err := new(jwt.Parser).ParseUnverified(newSessionOutput.AccessJwt, jwt.MapClaims{})
+		if err == nil {
+			if claims, ok := accessToken.Claims.(jwt.MapClaims); ok {
+				if expFloat, ok := claims["exp"].(float64); ok {
+					expTime := time.Unix(int64(expFloat), 0)
+					acc.ExpiresAt = sql.NullTime{Time: expTime, Valid: true}
+					logging.Info("New Bluesky access token expires at: %v", expTime)
+				}
+			}
+		}
+
+		// Parse new refresh token expiry
+		refreshToken, _, err := new(jwt.Parser).ParseUnverified(newSessionOutput.RefreshJwt, jwt.MapClaims{})
+		if err == nil {
+			if claims, ok := refreshToken.Claims.(jwt.MapClaims); ok {
+				if expFloat, ok := claims["exp"].(float64); ok {
+					expTime := time.Unix(int64(expFloat), 0)
+					acc.RefreshExpiresAt = sql.NullTime{Time: expTime, Valid: true}
+					logging.Info("New Bluesky refresh token expires at: %v", expTime)
+				}
+			}
+		}
+	}
 
 	logging.Info("Successfully refreshed Bluesky session for %s", acc.Username)
 	return acc, true, nil
