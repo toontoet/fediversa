@@ -1,0 +1,48 @@
+{{define "content"}}
+
+<h2>Status Overview</h2>
+<div class="container">
+    <div class="kpi">Total Synced Posts: <strong>{{ .Stats.TotalSyncedPosts | printf "%d" }}</strong></div>
+    <div class="kpi">Last Mastodon Post Sync: <strong>{{ if .Stats.LastMastodonSync.Valid }}{{ .Stats.LastMastodonSync.Time.Format "2006-01-02 15:04:05" }}{{ else }}Never{{ end }}</strong></div>
+    <div class="kpi">Last BlueSky Post Sync: <strong>{{ if .Stats.LastBlueskySync.Valid }}{{ .Stats.LastBlueskySync.Time.Format "2006-01-02 15:04:05" }}{{ else }}Never{{ end }}</strong></div>
+</div>
+
+<h2>Account Linking</h2>
+
+<!-- Mastodon Section -->
+<div class="container service-status">
+    <h3>Mastodon</h3>
+    {{if .Accounts.Mastodon}}
+        <p>Status: <strong>Linked</strong></p>
+        <p>Account: {{ .Accounts.Mastodon.Username }} ({{ .Accounts.Mastodon.UserID }})</p>
+        <p>Token Expires: {{ if .Accounts.Mastodon.ExpiresAt.Valid }}{{ .Accounts.Mastodon.ExpiresAt.Time.Format "2006-01-02 15:04:05" }}{{ else }}N/A{{ end }}</p>
+        <!-- TODO: Add button to re-authenticate or unlink -->
+    {{else}}
+        <p>Status: <strong>Not Linked</strong></p>
+        <!-- TODO: Replace with actual OAuth start URL -->
+        <form action="/auth/mastodon/login" method="post">
+            <button type="submit">Link Mastodon Account (OAuth)</button>
+        </form>
+    {{end}}
+</div>
+
+<!-- BlueSky Section -->
+<div class="container service-status">
+    <h3>BlueSky</h3>
+    {{if .Accounts.Bluesky}}
+        <p>Status: <strong>Linked</strong></p>
+        <p>Account: {{ .Accounts.Bluesky.Username }} ({{ .Accounts.Bluesky.UserID }})</p>
+        <!-- TODO: Add button to re-authenticate or unlink -->
+    {{else}}
+        <p>Status: <strong>Not Linked</strong></p>
+        <form action="/auth/bluesky/login" method="post">
+            <label for="bsky_identifier">Bluesky Handle/Email:</label><br>
+            <input type="text" id="bsky_identifier" name="identifier" required><br><br>
+            <label for="bsky_password">App Password:</label><br>
+            <input type="password" id="bsky_password" name="password" required><br><br>
+            <input type="submit" value="Link BlueSky Account">
+        </form>
+    {{end}}
+</div>
+
+{{end}}
