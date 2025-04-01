@@ -23,6 +23,10 @@ import (
 	"fediversa/internal/transform"
 )
 
+const (
+	blueskyCharLimit = 300 // Max characters for a Bluesky post
+)
+
 // Syncer handles the overall synchronization process.
 type Syncer struct {
 	DB             *database.DB
@@ -663,6 +667,17 @@ func (s *Syncer) syncServiceToTarget(ctx context.Context, sourceService, targetS
 			continue
 		}
 
+		// ---> Truncate content if targeting Bluesky and too long <---
+		if targetService == "bluesky" {
+			contentRunes := []rune(transformedContent)
+			if len(contentRunes) > blueskyCharLimit {
+				// Reserve 3 chars for ellipsis
+				truncatedRunes := contentRunes[:blueskyCharLimit-3]
+				transformedContent = string(truncatedRunes) + "..."
+				logging.Warn("Content for source post %s truncated to %d chars for Bluesky.", sourcePostID, len([]rune(transformedContent)))
+			}
+		}
+
 		// 9. Post to target service (Use direct clients)
 		var targetPostID string
 		var postErr error
@@ -699,7 +714,7 @@ func (s *Syncer) syncServiceToTarget(ctx context.Context, sourceService, targetS
 			// Use direct client s.MastodonClient
 			targetPostID, postErr = s.MastodonClient.Post(postCtx, transformedContent, targetMedia, mastoReplyToID)
 		case "bluesky":
-			// Use direct client s.BlueskyClient
+			// Use direct client s.BlueskyClient (transformedContent might be truncated now)
 			targetPostID, postErr = s.BlueskyClient.Post(postCtx, transformedContent, targetMedia, bskyReplyRef)
 		default:
 			postErr = fmt.Errorf("unsupported target service: %s", targetService)
