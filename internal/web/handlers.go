@@ -18,6 +18,7 @@ import (
 	"fediversa/internal/logging"
 	"fediversa/internal/models"
 
+	// Import generated templates
 	"github.com/gorilla/sessions"
 	"golang.org/x/oauth2"
 )
@@ -94,10 +95,11 @@ func NewHandler(cfg *config.Config, db *database.DB, mc *api.MastodonClient, bc 
 // RegisterRoutes sets up the HTTP routes.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/", h.handleIndex)
-	mux.HandleFunc("POST /auth/mastodon/login", h.handleMastodonLoginStart)
-	mux.HandleFunc("GET /auth/mastodon/callback", h.handleMastodonCallback)
+	mux.HandleFunc("/auth/mastodon/callback", h.handleMastodonCallback)
+	mux.HandleFunc("POST /auth/mastodon/login", h.handleMastodonLoginStart) // Trigger login - Restore correct handler
 	mux.HandleFunc("POST /auth/bluesky/login", h.handleBlueskyLogin)
 	// TODO: Add routes for logout/unlink?
+	// mux.HandleFunc("/debug/bluesky/refresh", h.handleDebugBlueskyRefresh) // REMOVE ROUTE
 }
 
 // handleIndex displays the main status page.
@@ -345,3 +347,52 @@ func (h *Handler) setFlash(w http.ResponseWriter, r *http.Request, message strin
 		// Handle error appropriately, maybe log or return an error response
 	}
 }
+
+// handleDebugBlueskyRefresh forces a token refresh for debugging purposes
+/*
+func (h *Handler) handleDebugBlueskyRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get Bluesky account from database
+	acc, err := h.DB.GetAccountByService("bluesky")
+	if err != nil {
+		logging.Error("Failed to get Bluesky account for debug refresh: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	if acc == nil {
+		http.Error(w, "Bluesky account not found", http.StatusNotFound)
+		return
+	}
+
+	// Set the session in the client
+	if err := h.BlueskyClient.SetSession(acc); err != nil {
+		logging.Error("Failed to set Bluesky session for debug refresh: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Force refresh the session
+	_, refreshed, err := h.BlueskyClient.RefreshSessionIfNeeded(r.Context(), acc, true)
+	if err != nil {
+		logging.Error("Debug refresh failed: %v", err)
+		http.Error(w, fmt.Sprintf("Refresh failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if refreshed {
+		// Save the updated account details
+		if err := h.DB.SaveAccount(acc); err != nil {
+			logging.Error("Failed to save updated account after debug refresh: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Redirect back to index with success message
+	http.Redirect(w, r, "/?message=Debug refresh completed", http.StatusSeeOther)
+}
+*/

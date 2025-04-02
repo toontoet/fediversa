@@ -110,7 +110,8 @@ func NewBlueskyClient(cfg *config.Config) (*BlueskyClient, error) {
 	// TODO: Make PDS configurable?
 	client := &xrpc.Client{
 		Host: defaultPDS,
-		// HTTPClient: getHttpClient(), // Can customize HTTP client if needed
+		// Client: &http.Client{Transport: &loggingTransport{}}, // Revert to default client
+		Client: getHttpClient(), // Use default http client for now
 	}
 
 	// We don't authenticate here. Authentication will create a session.
@@ -139,10 +140,6 @@ func (bsc *BlueskyClient) Authenticate(ctx context.Context, identifier, appPassw
 
 	logging.Info("Bluesky authentication successful for user: %s (DID: %s)", sess.Handle, sess.Did)
 
-	// Log token lengths received from Bluesky
-	logging.Info("Received Access JWT length: %d", len(sess.AccessJwt))
-	logging.Info("Received Refresh JWT length: %d", len(sess.RefreshJwt))
-
 	// Update the client with the authenticated session details
 	bsc.client.Auth = &xrpc.AuthInfo{
 		AccessJwt:  sess.AccessJwt,
@@ -168,7 +165,6 @@ func (bsc *BlueskyClient) Authenticate(ctx context.Context, identifier, appPassw
 			if expFloat, ok := claims["exp"].(float64); ok {
 				expTime := time.Unix(int64(expFloat), 0)
 				acc.ExpiresAt = sql.NullTime{Time: expTime, Valid: true}
-				logging.Info("Bluesky access token expires at: %v", expTime)
 			}
 		}
 	}
@@ -179,7 +175,6 @@ func (bsc *BlueskyClient) Authenticate(ctx context.Context, identifier, appPassw
 			if expFloat, ok := claims["exp"].(float64); ok {
 				expTime := time.Unix(int64(expFloat), 0)
 				acc.RefreshExpiresAt = sql.NullTime{Time: expTime, Valid: true}
-				logging.Info("Bluesky refresh token expires at: %v", expTime)
 			}
 		}
 	}
@@ -202,7 +197,6 @@ func (bsc *BlueskyClient) SetSession(account *models.Account) error {
 		Handle:     account.Username,
 		Did:        account.UserID,
 	}
-	logging.Info("Bluesky session set for user: %s (DID: %s)", account.Username, account.UserID)
 	return nil
 }
 
@@ -548,7 +542,7 @@ func (bsc *BlueskyClient) FetchAuthorFeed(ctx context.Context, actor string, cur
 
 // RefreshSessionIfNeeded checks if a refresh token exists and attempts to refresh the session.
 // It now includes logging the signing algorithm from the access token if parsing fails.
-func (bsc *BlueskyClient) RefreshSessionIfNeeded(ctx context.Context, acc *models.Account) (*models.Account, bool, error) {
+func (bsc *BlueskyClient) RefreshSessionIfNeeded(ctx context.Context, acc *models.Account, force bool) (*models.Account, bool, error) {
 	// 1. Check if RefreshToken exists and is still valid
 	if !acc.RefreshToken.Valid || acc.RefreshToken.String == "" {
 		logging.Info("No refresh token found for Bluesky account %s, cannot refresh.", acc.Username)
@@ -562,14 +556,15 @@ func (bsc *BlueskyClient) RefreshSessionIfNeeded(ctx context.Context, acc *model
 	}
 
 	// 2. Check if we need to refresh based on access token expiry time
-	shouldAttemptRefresh := true
-	if acc.ExpiresAt.Valid {
+	shouldAttemptRefresh := force
+	if !force && acc.ExpiresAt.Valid {
 		// Refresh if token expires in less than 5 minutes
 		if time.Now().Before(acc.ExpiresAt.Time.Add(-5 * time.Minute)) {
 			logging.Info("Bluesky access token for %s is still valid (expires at %v).", acc.Username, acc.ExpiresAt.Time)
 			shouldAttemptRefresh = false
 		} else {
 			logging.Info("Bluesky access token for %s is expired or nearing expiry (expires at %v).", acc.Username, acc.ExpiresAt.Time)
+			shouldAttemptRefresh = true
 		}
 	}
 
@@ -579,33 +574,37 @@ func (bsc *BlueskyClient) RefreshSessionIfNeeded(ctx context.Context, acc *model
 
 	// 3. Attempt refresh
 	logging.Info("Attempting to refresh Bluesky session for %s (refresh token found)...", acc.Username)
-	// ... (Log token preview) ...
-	tokenStr := acc.RefreshToken.String
-	tokenLen := len(tokenStr)
-	previewStart := ""
-	previewEnd := ""
-	previewCutoff := 10 // Number of characters to show
-	if tokenLen > 0 {
-		if tokenLen > previewCutoff {
-			previewStart = tokenStr[:previewCutoff]
-		} else {
-			previewStart = tokenStr
-		}
-		if tokenLen > previewCutoff*2 {
-			previewEnd = tokenStr[tokenLen-previewCutoff:]
-		} else if tokenLen > previewCutoff {
-			previewEnd = tokenStr[previewCutoff:]
-		}
-	}
-	logging.Info("Using Refresh Token for %s (len: %d, start: '%s...', end: '...%s')", acc.Username, tokenLen, previewStart, previewEnd)
 
-	// Use the correct function to call the refresh endpoint
-	// Ensure the client Auth reflects the loaded account state (set by SetSession before this call)
-	if bsc.client.Auth == nil || bsc.client.Auth.RefreshJwt != acc.RefreshToken.String {
-		logging.Warn("Client Auth state might be inconsistent before refresh call. Ensure SetSession is called beforehand.")
+	// Ensure the client Auth reflects the loaded account state
+	if bsc.client.Auth == nil {
+		logging.Warn("Client Auth is nil before refresh call. Setting it now.")
+		bsc.client.Auth = &xrpc.AuthInfo{
+			AccessJwt:  acc.AccessToken.String,
+			RefreshJwt: acc.RefreshToken.String,
+			Handle:     acc.Username,
+			Did:        acc.UserID,
+		}
+	} else if bsc.client.Auth.RefreshJwt != acc.RefreshToken.String {
+		logging.Warn("Client Auth refresh token mismatch. Updating it now.")
+		logging.Info("Client Auth refresh token: %v", bsc.client.Auth.RefreshJwt != "")
+		logging.Info("Account refresh token: %v", acc.RefreshToken.Valid)
+		bsc.client.Auth.RefreshJwt = acc.RefreshToken.String
 	}
+
+	// --- HACK: Temporarily swap tokens because ServerRefreshSession seems to use AccessJwt ---
+	originalAccessJwt := bsc.client.Auth.AccessJwt
+	originalRefreshJwt := bsc.client.Auth.RefreshJwt
+	bsc.client.Auth.AccessJwt = originalRefreshJwt // Use Refresh token in AccessJwt field for the call
+	// logging.Info("HACK: Using refresh token in AccessJwt field for ServerRefreshSession call.") // Remove hack log
+	// --- End HACK ---
 
 	newSessionOutput, err := comatproto.ServerRefreshSession(ctx, bsc.client)
+
+	// --- HACK: Restore original tokens immediately after the call ---
+	bsc.client.Auth.AccessJwt = originalAccessJwt
+	bsc.client.Auth.RefreshJwt = originalRefreshJwt
+	// logging.Info("HACK: Restored original tokens in client.Auth after ServerRefreshSession call.") // Remove hack log
+	// --- End HACK ---
 
 	if err != nil {
 		// No need to restore originalAuth as we didn't change it here
@@ -650,7 +649,7 @@ func (bsc *BlueskyClient) RefreshSessionIfNeeded(ctx context.Context, acc *model
 				if expFloat, ok := claims["exp"].(float64); ok {
 					expTime := time.Unix(int64(expFloat), 0)
 					acc.ExpiresAt = sql.NullTime{Time: expTime, Valid: true}
-					logging.Info("New Bluesky access token expires at: %v", expTime)
+					// logging.Info("New Bluesky access token expires at: %v", expTime)
 				}
 			}
 		}
@@ -662,7 +661,7 @@ func (bsc *BlueskyClient) RefreshSessionIfNeeded(ctx context.Context, acc *model
 				if expFloat, ok := claims["exp"].(float64); ok {
 					expTime := time.Unix(int64(expFloat), 0)
 					acc.RefreshExpiresAt = sql.NullTime{Time: expTime, Valid: true}
-					logging.Info("New Bluesky refresh token expires at: %v", expTime)
+					// logging.Info("New Bluesky refresh token expires at: %v", expTime)
 				}
 			}
 		}
@@ -670,4 +669,11 @@ func (bsc *BlueskyClient) RefreshSessionIfNeeded(ctx context.Context, acc *model
 
 	logging.Info("Successfully refreshed Bluesky session for %s", acc.Username)
 	return acc, true, nil
+}
+
+// getHttpClient returns a basic http client (can be expanded later)
+func getHttpClient() *http.Client {
+	return &http.Client{
+		Timeout: time.Second * 30, // Example timeout
+	}
 }

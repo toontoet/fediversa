@@ -828,7 +828,7 @@ func (s *Syncer) refreshBlueskySessionIfNeededHelper(ctx context.Context, acc *m
 	}
 
 	// Call the exported method
-	_, refreshed, err := s.BlueskyClient.RefreshSessionIfNeeded(ctx, acc)
+	_, refreshed, err := s.BlueskyClient.RefreshSessionIfNeeded(ctx, acc, false)
 	if err != nil {
 		return false, err // Propagate the error
 	}

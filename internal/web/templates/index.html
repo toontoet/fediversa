@@ -32,7 +32,12 @@
     {{if .Accounts.Bluesky}}
         <p>Status: <strong>Linked</strong></p>
         <p>Account: {{ .Accounts.Bluesky.Username }} ({{ .Accounts.Bluesky.UserID }})</p>
-        <!-- TODO: Add button to re-authenticate or unlink -->
+        <p>Token Expires: {{ if .Accounts.Bluesky.ExpiresAt.Valid }}{{ .Accounts.Bluesky.ExpiresAt.Time.Format "2006-01-02 15:04:05" }}{{ else }}N/A{{ end }}</p>
+        <form action="/auth/bluesky/login" method="post">
+            <input type="hidden" name="identifier" value="{{ .Accounts.Bluesky.Username }}">
+            <input type="hidden" name="password" value="{{ .Accounts.Bluesky.AppPassword.String }}">
+            <button type="submit">Re-authenticate</button>
+        </form>
     {{else}}
         <p>Status: <strong>Not Linked</strong></p>
         <form action="/auth/bluesky/login" method="post">

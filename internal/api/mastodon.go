@@ -213,12 +213,6 @@ func (msc *MastodonClient) Post(ctx context.Context, text string, media []*model
 	return string(status.ID), nil
 }
 
-// Helper function to get a standard http client (can be customized later if needed)
-func getHttpClient() *http.Client {
-	// TODO: Configure timeouts, proxy, etc. if necessary
-	return http.DefaultClient
-}
-
 // DownloadMedia downloads media from a given URL to a temporary file in the specified directory.
 // It returns the full path to the downloaded file and a cleanup function.
 // The cleanup function should be called (e.g., using defer) to remove the temporary file.
@@ -228,7 +222,7 @@ func (msc *MastodonClient) DownloadMedia(ctx context.Context, mediaURL string, d
 	// Use a default HTTP client for downloading external URLs
 	// We might not need authentication for this, assuming media URLs are public.
 	// TODO: Confirm if Mastodon media URLs require authentication.
-	client := getHttpClient()
+	client := http.DefaultClient
 
 	req, err := http.NewRequestWithContext(ctx, "GET", mediaURL, nil)
 	if err != nil {
