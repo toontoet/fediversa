@@ -1,5 +1,5 @@
 # Stage 1: Build the Go application
-FROM golang:1.22-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 WORKDIR /app
 
@@ -33,7 +33,7 @@ RUN apk add --no-cache sqlite-libs
 COPY --from=builder /app/fediversa .
 
 # Copy migrations needed at runtime for embedded migrations
-COPY migrations ./migrations
+COPY internal/database/migrations ./migrations
 
 # Create the directory for media storage (should ideally be a volume)
 RUN mkdir -p media && chown nobody:nogroup media

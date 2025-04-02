@@ -1,0 +1,34 @@
+# Environment variables
+.env*
+
+# Runtime data directories (should be volumes)
+media/
+db/
+
+# Database files (by extension or name)
+*.db
+*.sqlite
+*.sqlite3
+fediversa.db
+
+# Git directory
+.git/
+
+# IDE/Editor configuration
+.vscode/
+.idea/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Go build artifacts (should not be needed if building in Docker)
+fediversa
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+
+# Log files
+*.log
