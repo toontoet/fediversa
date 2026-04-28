@@ -91,8 +91,6 @@ func (m *signingMethodES256K) Sign(signingString string, key interface{}) ([]byt
 
 // --- End ES256K Registration ---
 
-const defaultPDS = "https://bsky.social" // Default PDS host
-
 // BlueskyClient wraps the indigo XRPC client and provides methods
 // specific to FediVersa's needs for Bluesky interaction.
 type BlueskyClient struct {
@@ -106,10 +104,15 @@ type BlueskyClient struct {
 func NewBlueskyClient(cfg *config.Config) (*BlueskyClient, error) {
 	logging.Info("Initializing Bluesky client.")
 
-	// Create a basic unauthenticated client connected to the default PDS
-	// TODO: Make PDS configurable?
+	pdsURL := strings.TrimRight(cfg.BlueskyPDSURL, "/")
+	if pdsURL == "" {
+		pdsURL = "https://bsky.social"
+	}
+	logging.Info("Using Bluesky PDS: %s", pdsURL)
+
+	// Create a basic unauthenticated client connected to the configured PDS.
 	client := &xrpc.Client{
-		Host: defaultPDS,
+		Host: pdsURL,
 		// Client: &http.Client{Transport: &loggingTransport{}}, // Revert to default client
 		Client: getHttpClient(), // Use default http client for now
 	}

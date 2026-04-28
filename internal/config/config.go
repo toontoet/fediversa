@@ -19,6 +19,7 @@ type Config struct {
 	MastodonClientSecret string
 	BlueskyIdentifier    string // Bluesky handle or email
 	BlueskyPassword      string // Bluesky app password
+	BlueskyPDSURL        string // e.g., "https://bsky.social"
 	WebAuthUsername      string
 	WebAuthPassword      string
 	SessionSecret        string
@@ -77,6 +78,7 @@ func LoadConfig() *Config {
 		MastodonClientSecret:   getEnv("MASTODON_CLIENT_SECRET", ""),
 		BlueskyIdentifier:      getEnv("BLUESKY_IDENTIFIER", ""), // Will likely be stored in DB later
 		BlueskyPassword:        getEnv("BLUESKY_PASSWORD", ""),   // Will likely be stored in DB later
+		BlueskyPDSURL:          getEnv("BLUESKY_PDS_URL", "https://bsky.social"),
 		WebAuthUsername:        getEnv("WEB_AUTH_USERNAME", "admin"),
 		WebAuthPassword:        getEnv("WEB_AUTH_PASSWORD", ""),
 		SessionSecret:          getEnv("SESSION_SECRET", ""),
