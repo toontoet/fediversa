@@ -13,16 +13,11 @@ RUN go mod download
 # Copy the rest of the application source code
 COPY . .
 
-# Build the application binary
-# Statically link and strip binary for smaller size
-# Ensure CGO_ENABLED=0 for Alpine compatibility if using sqlite3 without modifications
-# Note: CGO_ENABLED=0 might conflict with mattn/go-sqlite3 which uses Cgo.
-# If building on Alpine for Alpine, CGO might be okay, but cross-compiling needs CGO_ENABLED=0.
-# Let's assume building *on* Alpine for now.
-# If issues arise, consider CGO_ENABLED=0 and a pure Go sqlite driver, or ensure build env matches target.
+# Build the application binary. go-sqlite3 requires CGO, so this is built on Alpine
+# with the C toolchain installed above.
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
-RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags='-w -s' -o fediversa cmd/fediversa/main.go
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags='-w -s' -o fediversa ./cmd/fediversa
 
 # Stage 2: Create the final minimal image
 FROM alpine:latest
