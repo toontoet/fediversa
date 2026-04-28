@@ -1,7 +1,10 @@
 # Stage 1: Build the Go application
-FROM golang:1.24-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
+
+# go-sqlite3 uses CGO, so the builder needs a C toolchain and SQLite headers.
+RUN apk add --no-cache build-base sqlite-dev ca-certificates
 
 # Copy Go module files and download dependencies
 COPY go.mod go.sum ./
@@ -26,8 +29,8 @@ FROM alpine:latest
 
 WORKDIR /app
 
-# Install SQLite libraries needed by the CGO build of mattn/go-sqlite3
-RUN apk add --no-cache sqlite-libs
+# Install SQLite libraries and certificates needed at runtime.
+RUN apk add --no-cache sqlite-libs ca-certificates
 
 # Copy the compiled binary from the builder stage
 COPY --from=builder /app/fediversa .

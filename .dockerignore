@@ -7,9 +7,16 @@ db/
 
 # Database files (by extension or name)
 *.db
+*.db-shm
+*.db-wal
+*.db-journal
 *.sqlite
 *.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
 fediversa.db
+fedoversa.db
 
 # Git directory
 .git/

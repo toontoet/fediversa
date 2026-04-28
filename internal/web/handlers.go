@@ -69,7 +69,13 @@ func NewHandler(cfg *config.Config, db *database.DB, mc *api.MastodonClient, bc 
 	}
 
 	// Initialize session store
-	key := []byte("super-secret-key-replace-this!") // WARNING: Replace with a secure random key!
+	key := []byte(cfg.SessionSecret)
+	if len(key) == 0 {
+		key = generateSessionSecret()
+		logging.Warn("SESSION_SECRET is not set; generated a temporary session secret for this process.")
+	} else if len(key) < 32 {
+		logging.Warn("SESSION_SECRET should be at least 32 bytes for strong cookie signing.")
+	}
 	store := sessions.NewCookieStore(key)
 	store.Options = &sessions.Options{
 		Path:     "/",
@@ -90,6 +96,14 @@ func NewHandler(cfg *config.Config, db *database.DB, mc *api.MastodonClient, bc 
 		templates:      tmpl,
 		sessionStore:   store,
 	}
+}
+
+func generateSessionSecret() []byte {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		logging.Fatal("Failed to generate session secret: %v", err)
+	}
+	return key
 }
 
 // RegisterRoutes sets up the HTTP routes.

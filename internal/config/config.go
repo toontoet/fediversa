@@ -19,6 +19,9 @@ type Config struct {
 	MastodonClientSecret string
 	BlueskyIdentifier    string // Bluesky handle or email
 	BlueskyPassword      string // Bluesky app password
+	WebAuthUsername      string
+	WebAuthPassword      string
+	SessionSecret        string
 	// BaseURL is the public URL where the app is hosted, needed for OAuth callbacks
 	BaseURL string
 	// SyncBoostsReposts determines if boosts (Mastodon) or reposts (Bluesky) should be synced.
@@ -72,8 +75,11 @@ func LoadConfig() *Config {
 		MastodonServer:         getEnv("MASTODON_SERVER", ""), // Must be provided by user
 		MastodonClientID:       getEnv("MASTODON_CLIENT_ID", ""),
 		MastodonClientSecret:   getEnv("MASTODON_CLIENT_SECRET", ""),
-		BlueskyIdentifier:      getEnv("BLUESKY_IDENTIFIER", ""),            // Will likely be stored in DB later
-		BlueskyPassword:        getEnv("BLUESKY_PASSWORD", ""),              // Will likely be stored in DB later
+		BlueskyIdentifier:      getEnv("BLUESKY_IDENTIFIER", ""), // Will likely be stored in DB later
+		BlueskyPassword:        getEnv("BLUESKY_PASSWORD", ""),   // Will likely be stored in DB later
+		WebAuthUsername:        getEnv("WEB_AUTH_USERNAME", "admin"),
+		WebAuthPassword:        getEnv("WEB_AUTH_PASSWORD", ""),
+		SessionSecret:          getEnv("SESSION_SECRET", ""),
 		BaseURL:                getEnv("BASE_URL", "http://localhost:8080"), // Important for OAuth
 		SyncBoostsReposts:      syncBoosts,
 		SuppressNoNewPostsLogs: suppressLogs,

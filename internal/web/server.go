@@ -2,6 +2,8 @@ package web
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"errors"
 	"net/http"
 	"time"
@@ -40,10 +42,11 @@ func (s *Server) Start() {
 	// Setup routes
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
+	handler := h.authMiddleware(mux)
 
 	s.httpServer = &http.Server{
 		Addr:    s.Config.ListenAddr,
-		Handler: mux,
+		Handler: handler,
 		// TODO: Add timeouts for production readiness
 		ReadTimeout:  15 * time.Second, // Increased slightly
 		WriteTimeout: 15 * time.Second,
@@ -68,4 +71,33 @@ func (s *Server) Stop(ctx context.Context) error {
 		return s.httpServer.Shutdown(shutdownCtx)
 	}
 	return nil // No server was started
+}
+
+func (h *Handler) authMiddleware(next http.Handler) http.Handler {
+	if h.Config.WebAuthPassword == "" {
+		logging.Warn("WEB_AUTH_PASSWORD is not set; web UI is accessible without authentication.")
+		return next
+	}
+
+	username := h.Config.WebAuthUsername
+	if username == "" {
+		username = "admin"
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, password, ok := r.BasicAuth()
+		if !ok || !constantTimeEqual(user, username) || !constantTimeEqual(password, h.Config.WebAuthPassword) {
+			w.Header().Set("WWW-Authenticate", `Basic realm="FediVersa", charset="UTF-8"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func constantTimeEqual(a, b string) bool {
+	aHash := sha256.Sum256([]byte(a))
+	bHash := sha256.Sum256([]byte(b))
+	return subtle.ConstantTimeCompare(aHash[:], bHash[:]) == 1
 }
